@@ -4,6 +4,7 @@ Uses systemd journal if available, falls back to file logging.
 """
 
 import logging
+import logging.handlers
 import os
 import sys
 from pathlib import Path
@@ -81,5 +82,3 @@ def _try_journal_handler() -> logging.Handler | None:
     return None
 
 
-# Need to import here for RotatingFileHandler
-import logging.handlers  # noqa: E402

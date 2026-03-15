@@ -107,8 +107,8 @@ class ProfileManager:
             self._user_overridden = user_initiated
             log.info("Profile '%s' applied successfully", name)
         else:
-            log.warning("Profile '%s' applied with some failures", name)
-            self._active_profile = name  # Still track it
+            log.warning("Profile '%s' failed to apply", name)
+            # Don't update active profile on failure — keep the previous state
 
         return success
 
