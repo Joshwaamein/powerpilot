@@ -29,9 +29,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/powerpilot/powerpilot"
-Repository = "https://github.com/powerpilot/powerpilot"
-Issues = "https://github.com/powerpilot/powerpilot/issues"
+Homepage = "https://github.com/Joshwaamein/powerpilot"
+Repository = "https://github.com/Joshwaamein/powerpilot"
+Issues = "https://github.com/Joshwaamein/powerpilot/issues"
 
 [project.scripts]
 powerpilot = "powerpilot.app:main"

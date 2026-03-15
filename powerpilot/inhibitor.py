@@ -87,13 +87,18 @@ class AppInhibitor:
     def check_once(self) -> str | None:
         """Check running processes once against rules.
 
+        Uses substring matching: if any running process command line
+        contains the rule's process name, it's a match.
+
         Returns:
             Target profile name if an inhibiting app is found, None otherwise.
         """
         running = self._get_running_processes()
         for process_name, target_profile in self._rules.items():
-            if process_name.lower() in running:
-                return target_profile
+            needle = process_name.lower()
+            for cmdline in running:
+                if needle in cmdline:
+                    return target_profile
         return None
 
     def _poll_loop(self) -> None:
@@ -111,7 +116,12 @@ class AppInhibitor:
                             self._inhibit(name, self._rules[name])
                             break
                 elif not target and self._current_inhibitor:
-                    self._release()
+                    # Verify the inhibiting process is actually gone
+                    running = self._get_running_processes()
+                    needle = self._current_inhibitor.lower()
+                    still_running = any(needle in cmd for cmd in running)
+                    if not still_running:
+                        self._release()
             except Exception as e:
                 log.debug("Inhibitor poll error: %s", e)
 
@@ -142,10 +152,14 @@ class AppInhibitor:
                 log.error("Release callback error: %s", e)
 
     def _get_running_processes(self) -> set[str]:
-        """Get set of running process names (lowercase)."""
+        """Get set of running process command lines (lowercase).
+
+        Uses 'args' instead of 'comm' to avoid 15-char kernel truncation
+        and to support substring matching on full command lines.
+        """
         try:
             result = subprocess.run(
-                ["ps", "-eo", "comm="],
+                ["ps", "-eo", "args="],
                 capture_output=True,
                 text=True,
                 timeout=5,
