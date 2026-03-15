@@ -101,6 +101,7 @@ class PowerPilotApp:
         # GTK / AppIndicator setup
         self._indicator = None
         self._gtk_app = None
+        self._battery_label = None
 
     def run(self) -> None:
         """Run the application main loop."""
@@ -298,8 +299,23 @@ class PowerPilotApp:
 
         log.warning("Low battery triggered at %d%%", percent)
 
+        # Use configured battery profile, fall back to "power-saver"
+        general = self._config.get("general", {})
+        target = general.get("battery_profile", "power-saver")
+
+        # Verify the target profile exists
+        info = self._profile_mgr.get_profile_info(target)
+        if not info:
+            log.error("Low battery profile '%s' not found in config", target)
+            # Try "power-saver" as last resort
+            target = "power-saver"
+            info = self._profile_mgr.get_profile_info(target)
+            if not info:
+                log.error("No suitable low battery profile found")
+                return
+
         self._notifier.notify_low_battery(percent)
-        self._profile_mgr.switch_profile("power-saver", user_initiated=False)
+        self._profile_mgr.switch_profile(target, user_initiated=False)
         GLib.idle_add(self._rebuild_menu)
         GLib.idle_add(self._update_icon)
 
