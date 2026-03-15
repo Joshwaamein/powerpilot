@@ -3,9 +3,12 @@
 System tray application with AppIndicator for profile switching.
 """
 
+import argparse
 import logging
 import signal
 import sys
+
+from . import __version__
 
 log = logging.getLogger("powerpilot.app")
 
@@ -356,9 +359,27 @@ class PowerPilotApp:
         GLib.idle_add(self._update_icon)
 
     def _refresh_battery_label(self) -> bool:
-        """Refresh battery info and icon. Returns True to keep timer."""
+        """Refresh battery info text and icon without rebuilding the full menu."""
         try:
-            self._rebuild_menu()
+            if self._battery_label and self._hardware.battery:
+                battery = self._hardware.battery
+                charge = battery.charge_percent
+                status = battery.status
+                power = battery.power_draw_watts
+                remaining = battery.time_remaining_hours
+
+                text = f"🔋 {charge}%" if charge is not None else "🔋 --"
+                if status == "Charging":
+                    text += " ⚡ Charging"
+                elif status == "Discharging" and power:
+                    text += f" ({power}W)"
+                    if remaining:
+                        hours = int(remaining)
+                        mins = int((remaining - hours) * 60)
+                        text += f" ~{hours}h{mins:02d}m"
+
+                self._battery_label.set_label(text)
+
             self._update_icon()
         except Exception as e:
             log.debug("Battery refresh error: %s", e)
@@ -391,8 +412,8 @@ class PowerPilotApp:
             icon = self._get_battery_icon()
             self._indicator.set_icon_full(icon, "PowerPilot")
 
-    def _quit(self, *args) -> None:
-        """Clean shutdown."""
+    def _quit(self, *args) -> bool:
+        """Clean shutdown. Returns False for GLib signal handler."""
         log.info("PowerPilot shutting down...")
 
         if self._battery_monitor:
@@ -403,11 +424,50 @@ class PowerPilotApp:
         from gi.repository import Gtk
 
         Gtk.main_quit()
+        return False  # GLib.SOURCE_REMOVE
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        prog="powerpilot",
+        description="PowerPilot — A universal power profile manager for Linux",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"PowerPilot {__version__}",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging (overrides config)",
+    )
+    parser.add_argument(
+        "--no-notify",
+        action="store_true",
+        help="Disable desktop notifications",
+    )
+    return parser.parse_args(argv)
 
 
 def main() -> None:
     """Entry point for PowerPilot."""
+    args = parse_args()
+
     app = PowerPilotApp()
+
+    # Apply CLI overrides
+    if args.debug:
+        app._config.setdefault("general", {})["debug"] = True
+        from .log import setup_logging
+        # Re-init logging with debug
+        logging.getLogger("powerpilot").handlers.clear()
+        setup_logging(debug=True)
+
+    if args.no_notify:
+        app._notifier.enabled = False
+
     try:
         app.run()
     except KeyboardInterrupt:

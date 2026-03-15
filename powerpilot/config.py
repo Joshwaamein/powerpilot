@@ -24,7 +24,10 @@ except ImportError:
 # We'll write a minimal one rather than adding a dependency
 
 
+CONFIG_VERSION = 1
+
 DEFAULT_CONFIG = {
+    "config_version": CONFIG_VERSION,
     "general": {
         "backend": "auto",  # "auto", "tlp", "ppd", "sysfs"
         "show_notifications": True,
@@ -120,6 +123,19 @@ def load_config() -> dict:
 
     # Merge user config with defaults (user overrides defaults)
     config = _deep_merge(deepcopy(DEFAULT_CONFIG), user_config)
+
+    # Check config version and migrate if needed
+    user_version = user_config.get("config_version", 0)
+    if user_version < CONFIG_VERSION:
+        log.info(
+            "Config version %d → %d: merging new defaults",
+            user_version,
+            CONFIG_VERSION,
+        )
+        config["config_version"] = CONFIG_VERSION
+        # Save the upgraded config
+        save_config(config)
+
     return config
 
 
