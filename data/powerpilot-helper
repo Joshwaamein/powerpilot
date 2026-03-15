@@ -1,0 +1,141 @@
+#!/bin/bash
+# PowerPilot privileged helper script
+#
+# This script is called via pkexec to perform privileged operations:
+# - Symlink TLP profile configs to /etc/tlp.d/
+# - Remove PowerPilot TLP config
+# - Apply brightness changes (when sysfs isn't writable)
+#
+# Usage:
+#   powerpilot-helper apply <profile-config-path>
+#   powerpilot-helper remove
+#   powerpilot-helper brightness <backlight-path> <value>
+#   powerpilot-helper wifi-powersave <interface> <on|off>
+
+set -euo pipefail
+
+TLP_CONF_DIR="/etc/tlp.d"
+POWERPILOT_CONF="${TLP_CONF_DIR}/99-powerpilot.conf"
+
+log() {
+    logger -t "powerpilot-helper" "$@"
+}
+
+cmd_apply() {
+    local profile_path="$1"
+
+    if [ ! -f "$profile_path" ]; then
+        echo "Error: Profile file not found: $profile_path" >&2
+        exit 1
+    fi
+
+    # Validate the file looks like a TLP config (basic sanity check)
+    if ! grep -qE '^[A-Z_]+=' "$profile_path" 2>/dev/null; then
+        echo "Error: File doesn't look like a TLP config: $profile_path" >&2
+        exit 1
+    fi
+
+    # Ensure tlp.d directory exists
+    mkdir -p "$TLP_CONF_DIR"
+
+    # Remove existing PowerPilot config
+    rm -f "$POWERPILOT_CONF"
+
+    # Create symlink to the profile
+    ln -sf "$profile_path" "$POWERPILOT_CONF"
+
+    log "Applied TLP profile: $profile_path"
+
+    # Restart TLP to apply
+    if command -v tlp &>/dev/null; then
+        tlp start
+        log "TLP restarted"
+    fi
+
+    echo "OK"
+}
+
+cmd_remove() {
+    if [ -e "$POWERPILOT_CONF" ] || [ -L "$POWERPILOT_CONF" ]; then
+        rm -f "$POWERPILOT_CONF"
+        log "Removed PowerPilot TLP config"
+
+        # Restart TLP to apply defaults
+        if command -v tlp &>/dev/null; then
+            tlp start
+            log "TLP restarted (auto mode)"
+        fi
+    fi
+
+    echo "OK"
+}
+
+cmd_brightness() {
+    local backlight_path="$1"
+    local value="$2"
+
+    # Validate path is under /sys/class/backlight/
+    if [[ "$backlight_path" != /sys/class/backlight/* ]]; then
+        echo "Error: Invalid backlight path" >&2
+        exit 1
+    fi
+
+    local brightness_file="${backlight_path}/brightness"
+    if [ ! -f "$brightness_file" ]; then
+        echo "Error: Brightness file not found: $brightness_file" >&2
+        exit 1
+    fi
+
+    # Validate value is a number
+    if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+        echo "Error: Invalid brightness value: $value" >&2
+        exit 1
+    fi
+
+    echo "$value" > "$brightness_file"
+    log "Set brightness: $brightness_file = $value"
+    echo "OK"
+}
+
+cmd_wifi_powersave() {
+    local interface="$1"
+    local state="$2"
+
+    # Validate interface name (alphanumeric + limited special chars)
+    if ! [[ "$interface" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        echo "Error: Invalid interface name" >&2
+        exit 1
+    fi
+
+    if [[ "$state" != "on" && "$state" != "off" ]]; then
+        echo "Error: State must be 'on' or 'off'" >&2
+        exit 1
+    fi
+
+    iw dev "$interface" set power_save "$state"
+    log "Set Wi-Fi power save: $interface = $state"
+    echo "OK"
+}
+
+# Main dispatch
+case "${1:-}" in
+    apply)
+        [ $# -ge 2 ] || { echo "Usage: $0 apply <profile-path>" >&2; exit 1; }
+        cmd_apply "$2"
+        ;;
+    remove)
+        cmd_remove
+        ;;
+    brightness)
+        [ $# -ge 3 ] || { echo "Usage: $0 brightness <path> <value>" >&2; exit 1; }
+        cmd_brightness "$2" "$3"
+        ;;
+    wifi-powersave)
+        [ $# -ge 3 ] || { echo "Usage: $0 wifi-powersave <iface> <on|off>" >&2; exit 1; }
+        cmd_wifi_powersave "$2" "$3"
+        ;;
+    *)
+        echo "Usage: $0 {apply|remove|brightness|wifi-powersave}" >&2
+        exit 1
+        ;;
+esac
