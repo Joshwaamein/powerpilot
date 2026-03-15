@@ -92,15 +92,29 @@ class ProfileManager:
                 log.warning("Backend doesn't support TLP auto mode")
                 success = False
         else:
-            # Apply backend power profile
+            # For TLP backend, include profile in the batched helper call
+            tlp_profile_path = None
             power_profile = profile.get("power_profile")
-            if power_profile:
+            if power_profile and self._backend.backend_type == "tlp":
+                from pathlib import Path
+                import os
+                xdg = os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")
+                candidate = Path(xdg) / "powerpilot" / "tlp-profiles" / f"{power_profile}.conf"
+                if candidate.exists():
+                    tlp_profile_path = str(candidate)
+                else:
+                    # Fall back to normal backend set_profile
+                    if not self._backend.set_profile(power_profile):
+                        log.error("Failed to set backend profile: %s", power_profile)
+                        success = False
+            elif power_profile:
+                # PPD backend — no root needed
                 if not self._backend.set_profile(power_profile):
                     log.error("Failed to set backend profile: %s", power_profile)
                     success = False
 
-            # Apply hardware tweaks
-            if not self._apply_hardware_tweaks(profile):
+            # Apply hardware tweaks (includes TLP profile if needed)
+            if not self._apply_hardware_tweaks(profile, tlp_profile_path=tlp_profile_path):
                 success = False
 
         if success:
@@ -113,23 +127,38 @@ class ProfileManager:
 
         return success
 
-    def _apply_hardware_tweaks(self, profile: dict) -> bool:
+    def _apply_hardware_tweaks(self, profile: dict, tlp_profile_path: str | None = None) -> bool:
         """Apply hardware-level settings from a profile.
+
+        Tries direct writes first. If any fail with permissions,
+        batches all privileged tweaks into a single pkexec helper call
+        (one password prompt). Also includes TLP profile application
+        if tlp_profile_path is provided.
 
         Args:
             profile: Profile configuration dictionary.
+            tlp_profile_path: If set, include TLP profile symlink in the batch.
 
         Returns:
             True if all tweaks succeeded, False if any failed.
         """
         all_ok = True
+        needs_helper = []  # Collect tweaks that need root
+
+        # Include TLP profile in the batch if provided
+        if tlp_profile_path:
+            needs_helper.extend(["--tlp-profile", tlp_profile_path])
 
         # Screen brightness
         brightness = profile.get("screen_brightness_percent")
         if brightness is not None and self._hw.backlight:
+            bl = self._hw.backlight
+            value = max(0, min(bl.max_brightness, round(bl.max_brightness * brightness / 100)))
             try:
-                self._hw.backlight.set_percent(brightness)
+                (bl.path / "brightness").write_text(str(value))
                 log.debug("Set screen brightness to %d%%", brightness)
+            except PermissionError:
+                needs_helper.extend(["--brightness", str(bl.path), str(value)])
             except (OSError, IOError) as e:
                 log.warning("Failed to set screen brightness: %s", e)
                 all_ok = False
@@ -137,9 +166,13 @@ class ProfileManager:
         # Keyboard backlight
         kbd_level = profile.get("keyboard_backlight")
         if kbd_level is not None and self._hw.kbd_backlight:
+            kbd = self._hw.kbd_backlight
+            value = max(0, min(kbd.max_brightness, kbd_level))
             try:
-                self._hw.kbd_backlight.brightness = kbd_level
+                (kbd.path / "brightness").write_text(str(value))
                 log.debug("Set keyboard backlight to %d", kbd_level)
+            except PermissionError:
+                needs_helper.extend(["--kbd", str(kbd.path), str(value)])
             except (OSError, IOError) as e:
                 log.warning("Failed to set keyboard backlight: %s", e)
                 all_ok = False
@@ -147,13 +180,21 @@ class ProfileManager:
         # Wi-Fi power save
         wifi_ps = profile.get("wifi_power_save")
         if wifi_ps is not None and self._hw.wifi:
-            if not self._hw.wifi.set_power_save(wifi_ps):
-                log.warning("Failed to set Wi-Fi power save to %s", wifi_ps)
-                all_ok = False
-            else:
-                log.debug("Set Wi-Fi power save to %s", wifi_ps)
+            import subprocess
+            state = "on" if wifi_ps else "off"
+            try:
+                result = subprocess.run(
+                    ["iw", "dev", self._hw.wifi.interface, "set", "power_save", state],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0:
+                    log.debug("Set Wi-Fi power save to %s", wifi_ps)
+                else:
+                    needs_helper.extend(["--wifi", self._hw.wifi.interface, state])
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                needs_helper.extend(["--wifi", self._hw.wifi.interface, state])
 
-        # Bluetooth
+        # Bluetooth (rfkill doesn't need root on most systems)
         bt = profile.get("bluetooth")
         if bt is not None and self._hw.bluetooth and self._hw.bluetooth.available:
             if not self._hw.bluetooth.set_enabled(bt):
@@ -161,6 +202,16 @@ class ProfileManager:
                 all_ok = False
             else:
                 log.debug("Set Bluetooth to %s", "on" if bt else "off")
+
+        # Run batched privileged tweaks in a single pkexec call
+        if needs_helper:
+            from .hardware import _run_helper
+            try:
+                _run_helper("apply-tweaks", *needs_helper)
+                log.info("Applied %d hardware tweaks via helper", len(needs_helper) // 3)
+            except (OSError, IOError) as e:
+                log.error("Helper apply-tweaks failed: %s", e)
+                all_ok = False
 
         return all_ok
 

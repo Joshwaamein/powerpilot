@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 from powerpilot.hardware import BacklightInfo
 
 
@@ -63,9 +65,9 @@ class TestBrightnessFallback:
             bl.brightness = 75
             assert bl.brightness_percent == 75
 
-    @patch("powerpilot.hardware.BacklightInfo._set_brightness_ctl")
-    def test_fallback_to_brightnessctl(self, mock_ctl):
-        """When direct write fails with PermissionError, should fall back to brightnessctl."""
+    @patch("powerpilot.hardware._run_helper")
+    def test_fallback_to_helper(self, mock_helper):
+        """When direct write fails with PermissionError, should fall back to pkexec helper."""
         with tempfile.TemporaryDirectory() as tmpdir:
             bl = self._make_backlight(tmpdir)
 
@@ -74,35 +76,42 @@ class TestBrightnessFallback:
 
             bl.brightness = 60
 
-            # Should have called brightnessctl fallback
-            mock_ctl.assert_called_once_with(60)
+            # Should have called helper with brightness command
+            mock_helper.assert_called_once_with("brightness", str(bl.path), "60")
 
             # Restore permissions for cleanup
             os.chmod(bl.path / "brightness", 0o644)
 
-    @patch("subprocess.run")
-    def test_brightnessctl_called_correctly(self, mock_run):
-        """_set_brightness_ctl should call brightnessctl with correct args."""
+    @patch("powerpilot.hardware._run_helper")
+    def test_helper_called_with_correct_args(self, mock_helper):
+        """Helper should be called with brightness command, path, and value."""
         with tempfile.TemporaryDirectory() as tmpdir:
             bl = self._make_backlight(tmpdir)
 
-            mock_run.return_value = MagicMock(returncode=0)
-            bl._set_brightness_ctl(42)
+            # Make read-only to force helper path
+            os.chmod(bl.path / "brightness", 0o444)
 
-            mock_run.assert_called_once()
-            args = mock_run.call_args[0][0]
-            assert args[0] == "brightnessctl"
-            assert "42" in args
+            bl.brightness = 42
 
-    @patch("subprocess.run", side_effect=FileNotFoundError)
-    def test_brightnessctl_not_installed(self, mock_run):
-        """If brightnessctl is not installed, should raise PermissionError."""
+            mock_helper.assert_called_once()
+            args = mock_helper.call_args[0]
+            assert args[0] == "brightness"
+            assert str(bl.path) in args[1]
+            assert args[2] == "42"
+
+            os.chmod(bl.path / "brightness", 0o644)
+
+    @patch("powerpilot.hardware._run_helper", side_effect=OSError("helper not found"))
+    def test_helper_failure_raises(self, mock_helper):
+        """If helper also fails, should raise OSError."""
         with tempfile.TemporaryDirectory() as tmpdir:
             bl = self._make_backlight(tmpdir)
+            os.chmod(bl.path / "brightness", 0o444)
 
-            import pytest
-            with pytest.raises(PermissionError, match="brightnessctl not installed"):
-                bl._set_brightness_ctl(50)
+            with pytest.raises(OSError):
+                bl.brightness = 50
+
+            os.chmod(bl.path / "brightness", 0o644)
 
 
 class TestKbdBacklight:
@@ -172,12 +181,24 @@ class TestWifiInfo:
         args = mock_run.call_args[0][0]
         assert "on" in args
 
+    @patch("powerpilot.hardware._run_helper_bool", return_value=False)
     @patch("subprocess.run")
-    def test_set_power_save_failure(self, mock_run):
+    def test_set_power_save_failure_with_helper_fallback(self, mock_run, mock_helper):
+        """When iw fails, should try helper. If helper also fails, return False."""
         from powerpilot.hardware import WifiInfo
         mock_run.return_value = MagicMock(returncode=1)
         wifi = WifiInfo(interface="wlan0")
         assert wifi.set_power_save(True) is False
+        mock_helper.assert_called_once()
+
+    @patch("powerpilot.hardware._run_helper_bool", return_value=True)
+    @patch("subprocess.run")
+    def test_set_power_save_helper_succeeds(self, mock_run, mock_helper):
+        """When iw fails but helper succeeds, should return True."""
+        from powerpilot.hardware import WifiInfo
+        mock_run.return_value = MagicMock(returncode=1)
+        wifi = WifiInfo(interface="wlan0")
+        assert wifi.set_power_save(True) is True
 
 
 class TestBluetoothInfo:
