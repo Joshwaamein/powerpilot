@@ -32,9 +32,32 @@ class BacklightInfo:
 
     @brightness.setter
     def brightness(self, value: int) -> None:
-        """Set brightness value (requires write permission or helper)."""
+        """Set brightness value. Tries direct sysfs write, falls back to brightnessctl."""
         value = max(0, min(value, self.max_brightness))
-        (self.path / "brightness").write_text(str(value))
+        try:
+            (self.path / "brightness").write_text(str(value))
+        except PermissionError:
+            log.debug("Direct brightness write failed (no permission), trying brightnessctl")
+            self._set_brightness_ctl(value)
+
+    def _set_brightness_ctl(self, value: int) -> None:
+        """Set brightness using brightnessctl CLI tool."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["brightnessctl", "-d", self.name, "set", str(value)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode != 0:
+                raise OSError(f"brightnessctl failed: {result.stderr}")
+            log.debug("Set brightness via brightnessctl: %d", value)
+        except FileNotFoundError:
+            raise PermissionError(
+                "Cannot set brightness: no write permission to sysfs and "
+                "brightnessctl not installed. Install brightnessctl or run as root."
+            )
 
     @property
     def brightness_percent(self) -> int:

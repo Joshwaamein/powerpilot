@@ -100,7 +100,8 @@ class ProfileManager:
                     success = False
 
             # Apply hardware tweaks
-            self._apply_hardware_tweaks(profile)
+            if not self._apply_hardware_tweaks(profile):
+                success = False
 
         if success:
             self._active_profile = name
@@ -112,12 +113,17 @@ class ProfileManager:
 
         return success
 
-    def _apply_hardware_tweaks(self, profile: dict) -> None:
+    def _apply_hardware_tweaks(self, profile: dict) -> bool:
         """Apply hardware-level settings from a profile.
 
         Args:
             profile: Profile configuration dictionary.
+
+        Returns:
+            True if all tweaks succeeded, False if any failed.
         """
+        all_ok = True
+
         # Screen brightness
         brightness = profile.get("screen_brightness_percent")
         if brightness is not None and self._hw.backlight:
@@ -126,6 +132,7 @@ class ProfileManager:
                 log.debug("Set screen brightness to %d%%", brightness)
             except (OSError, IOError) as e:
                 log.warning("Failed to set screen brightness: %s", e)
+                all_ok = False
 
         # Keyboard backlight
         kbd_level = profile.get("keyboard_backlight")
@@ -135,12 +142,14 @@ class ProfileManager:
                 log.debug("Set keyboard backlight to %d", kbd_level)
             except (OSError, IOError) as e:
                 log.warning("Failed to set keyboard backlight: %s", e)
+                all_ok = False
 
         # Wi-Fi power save
         wifi_ps = profile.get("wifi_power_save")
         if wifi_ps is not None and self._hw.wifi:
             if not self._hw.wifi.set_power_save(wifi_ps):
                 log.warning("Failed to set Wi-Fi power save to %s", wifi_ps)
+                all_ok = False
             else:
                 log.debug("Set Wi-Fi power save to %s", wifi_ps)
 
@@ -149,8 +158,11 @@ class ProfileManager:
         if bt is not None and self._hw.bluetooth and self._hw.bluetooth.available:
             if not self._hw.bluetooth.set_enabled(bt):
                 log.warning("Failed to set Bluetooth to %s", bt)
+                all_ok = False
             else:
                 log.debug("Set Bluetooth to %s", "on" if bt else "off")
+
+        return all_ok
 
     def detect_current_profile(self) -> str | None:
         """Try to detect which profile matches the current system state.
