@@ -39,7 +39,7 @@ DEFAULT_CONFIG = {
     "profiles": {
         "power-saver": {
             "label": "Power Saver",
-            "icon": "battery-caution-symbolic",
+            "icon": "battery-level-30-symbolic",
             "power_profile": "power-saver",
             "screen_brightness_percent": 30,
             "keyboard_backlight": 0,
