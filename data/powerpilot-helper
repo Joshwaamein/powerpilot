@@ -117,6 +117,40 @@ cmd_wifi_powersave() {
     echo "OK"
 }
 
+cmd_switch_backend() {
+    local target="$1"
+
+    case "$target" in
+        tlp)
+            log "Switching backend to TLP"
+            if ! apt-get install -y tlp tlp-rdw 2>&1; then
+                echo "Error: Failed to install TLP" >&2
+                exit 1
+            fi
+            # apt auto-removes power-profiles-daemon
+            if command -v tlp &>/dev/null; then
+                tlp start
+                log "TLP started"
+            fi
+            ;;
+        ppd)
+            log "Switching backend to power-profiles-daemon"
+            if ! apt-get install -y power-profiles-daemon 2>&1; then
+                echo "Error: Failed to install power-profiles-daemon" >&2
+                exit 1
+            fi
+            # apt auto-removes tlp/tlp-rdw
+            ;;
+        *)
+            echo "Error: Invalid backend '$target'. Use 'tlp' or 'ppd'." >&2
+            exit 1
+            ;;
+    esac
+
+    log "Backend switched to: $target"
+    echo "OK"
+}
+
 # Main dispatch
 case "${1:-}" in
     apply)
@@ -134,8 +168,12 @@ case "${1:-}" in
         [ $# -ge 3 ] || { echo "Usage: $0 wifi-powersave <iface> <on|off>" >&2; exit 1; }
         cmd_wifi_powersave "$2" "$3"
         ;;
+    switch-backend)
+        [ $# -ge 2 ] || { echo "Usage: $0 switch-backend <tlp|ppd>" >&2; exit 1; }
+        cmd_switch_backend "$2"
+        ;;
     *)
-        echo "Usage: $0 {apply|remove|brightness|wifi-powersave}" >&2
+        echo "Usage: $0 {apply|remove|brightness|wifi-powersave|switch-backend}" >&2
         exit 1
         ;;
 esac
