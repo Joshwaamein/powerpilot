@@ -237,6 +237,18 @@ class PowerPilotApp:
 
         menu.append(Gtk.SeparatorMenuItem())
 
+        # Switch backend option
+        from .switcher import BackendSwitcher
+        switcher = BackendSwitcher()
+        alt = switcher.get_alternative_backend()
+        if alt:
+            alt_label = "TLP" if alt == "tlp" else "power-profiles-daemon"
+            switch_item = Gtk.MenuItem(label=f"    🔄 Switch to {alt_label}")
+            switch_item.connect("activate", self._on_switch_backend, alt)
+            menu.append(switch_item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
         # Quit
         quit_item = Gtk.MenuItem(label="    Quit")
         quit_item.connect("activate", lambda _: self._quit())
@@ -321,6 +333,64 @@ class PowerPilotApp:
         self._profile_mgr.switch_profile(target, user_initiated=False)
         GLib.idle_add(self._rebuild_menu)
         GLib.idle_add(self._update_icon)
+
+    def _on_switch_backend(self, widget, target: str) -> None:
+        """Handle backend switch request from menu."""
+        from gi.repository import GLib
+
+        from .switcher import BackendSwitcher
+
+        switcher = BackendSwitcher()
+        can_switch, reason = switcher.can_switch_to(target)
+        if not can_switch:
+            self._notifier.notify(
+                title="PowerPilot",
+                body=f"Cannot switch: {reason}",
+                icon="dialog-error-symbolic",
+                urgency="normal",
+            )
+            return
+
+        alt_label = "TLP" if target == "tlp" else "power-profiles-daemon"
+        self._notifier.notify(
+            title="PowerPilot",
+            body=f"Switching to {alt_label}... This may take a moment.",
+            icon="system-software-install-symbolic",
+        )
+
+        # Run in background thread to avoid freezing the UI
+        import threading
+
+        def _do_switch():
+            success, msg = switcher.switch_to(target)
+            if success:
+                GLib.idle_add(
+                    self._notifier.notify,
+                    "PowerPilot",
+                    f"Switched to {alt_label}! Restarting...",
+                    "emblem-ok-symbolic",
+                    "normal",
+                )
+                # Give notification time to show, then restart
+                import time
+                time.sleep(2)
+                # Stop background services before restart
+                if self._battery_monitor:
+                    self._battery_monitor.stop()
+                if self._inhibitor:
+                    self._inhibitor.stop()
+                switcher.restart_app()
+            else:
+                GLib.idle_add(
+                    self._notifier.notify,
+                    "PowerPilot",
+                    f"Switch failed: {msg}",
+                    "dialog-error-symbolic",
+                    "critical",
+                )
+
+        thread = threading.Thread(target=_do_switch, daemon=True)
+        thread.start()
 
     def _on_app_inhibit(self, process_name: str, target_profile: str) -> None:
         """Handle app inhibitor activation."""
@@ -448,12 +518,38 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Disable desktop notifications",
     )
+    parser.add_argument(
+        "--switch-backend",
+        choices=["tlp", "ppd"],
+        metavar="BACKEND",
+        help="Switch power backend to tlp or ppd (requires root)",
+    )
     return parser.parse_args(argv)
 
 
 def main() -> None:
     """Entry point for PowerPilot."""
     args = parse_args()
+
+    # Handle --switch-backend before starting the GUI
+    if args.switch_backend:
+        from .switcher import BackendSwitcher
+
+        switcher = BackendSwitcher()
+        can_switch, reason = switcher.can_switch_to(args.switch_backend)
+        if not can_switch:
+            print(f"Cannot switch: {reason}", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"Switching backend to {args.switch_backend}...")
+        success, msg = switcher.switch_to(args.switch_backend)
+        if success:
+            print(f"✓ {msg}")
+            print("Restart PowerPilot to use the new backend.")
+        else:
+            print(f"✗ {msg}", file=sys.stderr)
+            sys.exit(1)
+        return
 
     app = PowerPilotApp()
 
