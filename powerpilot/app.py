@@ -108,19 +108,25 @@ class PowerPilotApp:
 
         gi.require_version("Gtk", "3.0")
 
+        # Try the newer glib-based library first, then fall back
         try:
-            gi.require_version("AyatanaAppIndicator3", "0.1")
-            from gi.repository import AyatanaAppIndicator3 as AppIndicator
+            gi.require_version("AyatanaAppIndicatorGlib", "2.0")
+            from gi.repository import AyatanaAppIndicatorGlib as AppIndicator
         except (ValueError, ImportError):
             try:
-                gi.require_version("AppIndicator3", "0.1")
-                from gi.repository import AppIndicator3 as AppIndicator
+                gi.require_version("AyatanaAppIndicator3", "0.1")
+                from gi.repository import AyatanaAppIndicator3 as AppIndicator
             except (ValueError, ImportError):
-                log.error(
-                    "Neither AyatanaAppIndicator3 nor AppIndicator3 found. "
-                    "Install gir1.2-ayatanaappindicator3-0.1 or gir1.2-appindicator3-0.1"
-                )
-                sys.exit(1)
+                try:
+                    gi.require_version("AppIndicator3", "0.1")
+                    from gi.repository import AppIndicator3 as AppIndicator
+                except (ValueError, ImportError):
+                    log.error(
+                        "No AppIndicator library found. "
+                        "Install gir1.2-ayatanaappindicatorglib-2.0 or "
+                        "gir1.2-ayatanaappindicator3-0.1"
+                    )
+                    sys.exit(1)
 
         from gi.repository import Gtk, GLib
 
@@ -131,7 +137,7 @@ class PowerPilotApp:
         # Create indicator
         self._indicator = AppIndicator.Indicator.new(
             "powerpilot",
-            self._get_current_icon(),
+            self._get_battery_icon(),
             AppIndicator.IndicatorCategory.HARDWARE,
         )
         self._indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
@@ -329,28 +335,40 @@ class PowerPilotApp:
         GLib.idle_add(self._update_icon)
 
     def _refresh_battery_label(self) -> bool:
-        """Refresh battery info in the menu. Returns True to keep timer."""
+        """Refresh battery info and icon. Returns True to keep timer."""
         try:
             self._rebuild_menu()
+            self._update_icon()
         except Exception as e:
             log.debug("Battery refresh error: %s", e)
         return True  # Keep the timer running
 
-    def _get_current_icon(self) -> str:
-        """Get the icon name for the current profile."""
-        active = self._profile_mgr.active_profile
-        if active:
-            info = self._profile_mgr.get_profile_info(active)
-            if info:
-                return info.get("icon", "battery-good-symbolic")
-        return "battery-good-symbolic"
+    def _get_battery_icon(self) -> str:
+        """Get an icon name reflecting the current battery level and charging state."""
+        if not self._hardware.battery:
+            return "battery-missing-symbolic"
+
+        battery = self._hardware.battery
+        charge = battery.charge_percent
+        status = battery.status
+
+        if charge is None:
+            return "battery-missing-symbolic"
+
+        # Round to nearest 10 for icon name
+        level = round(charge / 10) * 10
+        level = max(0, min(100, level))
+
+        if status == "Charging" or status == "Full":
+            return f"battery-level-{level}-charging-symbolic"
+        else:
+            return f"battery-level-{level}-symbolic"
 
     def _update_icon(self) -> None:
-        """Update the tray icon to match the current profile."""
+        """Update the tray icon to reflect current battery level."""
         if self._indicator:
-            self._indicator.set_icon_full(
-                self._get_current_icon(), "PowerPilot"
-            )
+            icon = self._get_battery_icon()
+            self._indicator.set_icon_full(icon, "PowerPilot")
 
     def _quit(self, *args) -> None:
         """Clean shutdown."""
