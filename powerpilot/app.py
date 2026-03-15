@@ -105,6 +105,8 @@ class PowerPilotApp:
         self._indicator = None
         self._gtk_app = None
         self._battery_label = None
+        self._last_valid_remaining: float | None = None
+        self._last_valid_power: float | None = None
 
     def run(self) -> None:
         """Run the application main loop."""
@@ -190,22 +192,7 @@ class PowerPilotApp:
 
         # Battery info
         if self._hardware.battery:
-            battery = self._hardware.battery
-            charge = battery.charge_percent
-            status = battery.status
-            power = battery.power_draw_watts
-            remaining = battery.time_remaining_hours
-
-            battery_text = f"🔋 {charge}%" if charge is not None else "🔋 --"
-            if status == "Charging":
-                battery_text += " ⚡ Charging"
-            elif status == "Discharging" and power:
-                battery_text += f" ({power}W)"
-                if remaining:
-                    hours = int(remaining)
-                    mins = int((remaining - hours) * 60)
-                    battery_text += f" ~{hours}h{mins:02d}m"
-
+            battery_text = self._build_battery_text()
             self._battery_label = Gtk.MenuItem(label=battery_text)
             self._battery_label.set_sensitive(False)
             menu.append(self._battery_label)
@@ -428,28 +415,55 @@ class PowerPilotApp:
         GLib.idle_add(self._rebuild_menu)
         GLib.idle_add(self._update_icon)
 
+    def _build_battery_text(self) -> str:
+        """Build battery status text with cached time remaining.
+
+        Caches the last valid power draw and time remaining so that
+        momentary 0-readings from the kernel don't blank the display.
+        Always shows time remaining when on battery.
+        """
+        battery = self._hardware.battery
+        charge = battery.charge_percent
+        status = battery.status
+        power = battery.power_draw_watts
+        remaining = battery.time_remaining_hours
+
+        text = f"🔋 {charge}%" if charge is not None else "🔋 --"
+
+        if status == "Charging":
+            text += " ⚡ Charging"
+        elif status == "Full":
+            text += " ⚡ Full"
+        elif status == "Not charging":
+            text += " ⏸ Not charging"
+        elif status == "Discharging":
+            # Update cached values when we get valid readings
+            if power and power > 0:
+                self._last_valid_power = power
+            if remaining and remaining > 0:
+                self._last_valid_remaining = remaining
+
+            # Use current or cached power draw
+            display_power = power if (power and power > 0) else self._last_valid_power
+            display_remaining = remaining if (remaining and remaining > 0) else self._last_valid_remaining
+
+            if display_power:
+                text += f" ({display_power}W)"
+
+            if display_remaining:
+                hours = int(display_remaining)
+                mins = int((display_remaining - hours) * 60)
+                text += f" ~{hours}h{mins:02d}m"
+            else:
+                text += " — calculating..."
+
+        return text
+
     def _refresh_battery_label(self) -> bool:
         """Refresh battery info text and icon without rebuilding the full menu."""
         try:
             if self._battery_label and self._hardware.battery:
-                battery = self._hardware.battery
-                charge = battery.charge_percent
-                status = battery.status
-                power = battery.power_draw_watts
-                remaining = battery.time_remaining_hours
-
-                text = f"🔋 {charge}%" if charge is not None else "🔋 --"
-                if status == "Charging":
-                    text += " ⚡ Charging"
-                elif status == "Discharging" and power:
-                    text += f" ({power}W)"
-                    if remaining:
-                        hours = int(remaining)
-                        mins = int((remaining - hours) * 60)
-                        text += f" ~{hours}h{mins:02d}m"
-
-                self._battery_label.set_label(text)
-
+                self._battery_label.set_label(self._build_battery_text())
             self._update_icon()
         except Exception as e:
             log.debug("Battery refresh error: %s", e)

@@ -97,6 +97,32 @@ cmd_brightness() {
     echo "OK"
 }
 
+cmd_kbd_brightness() {
+    local kbd_path="$1"
+    local value="$2"
+
+    # Validate path is under /sys/class/leds/
+    if [[ "$kbd_path" != /sys/class/leds/* ]]; then
+        echo "Error: Invalid keyboard backlight path" >&2
+        exit 1
+    fi
+
+    local brightness_file="${kbd_path}/brightness"
+    if [ ! -f "$brightness_file" ]; then
+        echo "Error: Brightness file not found: $brightness_file" >&2
+        exit 1
+    fi
+
+    if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+        echo "Error: Invalid brightness value: $value" >&2
+        exit 1
+    fi
+
+    echo "$value" > "$brightness_file"
+    log "Set kbd brightness: $brightness_file = $value"
+    echo "OK"
+}
+
 cmd_wifi_powersave() {
     local interface="$1"
     local state="$2"
@@ -114,6 +140,83 @@ cmd_wifi_powersave() {
 
     iw dev "$interface" set power_save "$state"
     log "Set Wi-Fi power save: $interface = $state"
+    echo "OK"
+}
+
+cmd_apply_tweaks() {
+    # Apply multiple hardware tweaks in a single privileged call.
+    # Arguments are pairs: --type args...
+    # Supported types: --brightness <path> <value>
+    #                  --kbd <path> <value>
+    #                  --wifi <iface> <on|off>
+    shift  # Remove "apply-tweaks" from args (already consumed by case)
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --brightness)
+                [ $# -ge 3 ] || { echo "Error: --brightness needs <path> <value>" >&2; exit 1; }
+                local bl_path="$2"
+                local bl_val="$3"
+                if [[ "$bl_path" == /sys/class/backlight/* ]] && [[ "$bl_val" =~ ^[0-9]+$ ]]; then
+                    echo "$bl_val" > "${bl_path}/brightness"
+                    log "Set brightness: ${bl_path}/brightness = $bl_val"
+                else
+                    echo "Error: Invalid brightness args" >&2
+                    exit 1
+                fi
+                shift 3
+                ;;
+            --kbd)
+                [ $# -ge 3 ] || { echo "Error: --kbd needs <path> <value>" >&2; exit 1; }
+                local kbd_path="$2"
+                local kbd_val="$3"
+                if [[ "$kbd_path" == /sys/class/leds/* ]] && [[ "$kbd_val" =~ ^[0-9]+$ ]]; then
+                    echo "$kbd_val" > "${kbd_path}/brightness"
+                    log "Set kbd brightness: ${kbd_path}/brightness = $kbd_val"
+                else
+                    echo "Error: Invalid kbd args" >&2
+                    exit 1
+                fi
+                shift 3
+                ;;
+            --wifi)
+                [ $# -ge 3 ] || { echo "Error: --wifi needs <iface> <on|off>" >&2; exit 1; }
+                local iface="$2"
+                local state="$3"
+                if [[ "$iface" =~ ^[a-zA-Z0-9_-]+$ ]] && [[ "$state" == "on" || "$state" == "off" ]]; then
+                    iw dev "$iface" set power_save "$state"
+                    log "Set Wi-Fi power save: $iface = $state"
+                else
+                    echo "Error: Invalid wifi args" >&2
+                    exit 1
+                fi
+                shift 3
+                ;;
+            --tlp-profile)
+                [ $# -ge 2 ] || { echo "Error: --tlp-profile needs <path>" >&2; exit 1; }
+                local profile_path="$2"
+                if [ -f "$profile_path" ]; then
+                    mkdir -p "$TLP_CONF_DIR"
+                    rm -f "$POWERPILOT_CONF"
+                    ln -sf "$profile_path" "$POWERPILOT_CONF"
+                    log "Applied TLP profile: $profile_path"
+                    if command -v tlp &>/dev/null; then
+                        tlp start
+                        log "TLP restarted"
+                    fi
+                else
+                    echo "Error: TLP profile not found: $profile_path" >&2
+                    exit 1
+                fi
+                shift 2
+                ;;
+            *)
+                echo "Error: Unknown tweak type '$1'" >&2
+                exit 1
+                ;;
+        esac
+    done
+
     echo "OK"
 }
 
@@ -164,9 +267,16 @@ case "${1:-}" in
         [ $# -ge 3 ] || { echo "Usage: $0 brightness <path> <value>" >&2; exit 1; }
         cmd_brightness "$2" "$3"
         ;;
+    kbd-brightness)
+        [ $# -ge 3 ] || { echo "Usage: $0 kbd-brightness <path> <value>" >&2; exit 1; }
+        cmd_kbd_brightness "$2" "$3"
+        ;;
     wifi-powersave)
         [ $# -ge 3 ] || { echo "Usage: $0 wifi-powersave <iface> <on|off>" >&2; exit 1; }
         cmd_wifi_powersave "$2" "$3"
+        ;;
+    apply-tweaks)
+        cmd_apply_tweaks "$@"
         ;;
     switch-backend)
         [ $# -ge 2 ] || { echo "Usage: $0 switch-backend <tlp|ppd>" >&2; exit 1; }

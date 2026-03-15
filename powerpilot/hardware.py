@@ -32,32 +32,13 @@ class BacklightInfo:
 
     @brightness.setter
     def brightness(self, value: int) -> None:
-        """Set brightness value. Tries direct sysfs write, falls back to brightnessctl."""
+        """Set brightness value. Tries direct sysfs write, falls back to pkexec helper."""
         value = max(0, min(value, self.max_brightness))
         try:
             (self.path / "brightness").write_text(str(value))
         except PermissionError:
-            log.debug("Direct brightness write failed (no permission), trying brightnessctl")
-            self._set_brightness_ctl(value)
-
-    def _set_brightness_ctl(self, value: int) -> None:
-        """Set brightness using brightnessctl CLI tool."""
-        import subprocess
-        try:
-            result = subprocess.run(
-                ["brightnessctl", "-d", self.name, "set", str(value)],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode != 0:
-                raise OSError(f"brightnessctl failed: {result.stderr}")
-            log.debug("Set brightness via brightnessctl: %d", value)
-        except FileNotFoundError:
-            raise PermissionError(
-                "Cannot set brightness: no write permission to sysfs and "
-                "brightnessctl not installed. Install brightnessctl or run as root."
-            )
+            log.debug("Direct brightness write failed, using helper")
+            _run_helper("brightness", str(self.path), str(value))
 
     @property
     def brightness_percent(self) -> int:
@@ -85,9 +66,13 @@ class KbdBacklightInfo:
 
     @brightness.setter
     def brightness(self, value: int) -> None:
-        """Set keyboard backlight level."""
+        """Set keyboard backlight level. Falls back to pkexec helper on permission error."""
         value = max(0, min(value, self.max_brightness))
-        (self.path / "brightness").write_text(str(value))
+        try:
+            (self.path / "brightness").write_text(str(value))
+        except PermissionError:
+            log.debug("Direct kbd write failed, using helper")
+            _run_helper("kbd-brightness", str(self.path), str(value))
 
 
 @dataclass
@@ -193,7 +178,7 @@ class WifiInfo:
         return None
 
     def set_power_save(self, enabled: bool) -> bool:
-        """Set Wi-Fi power save. Returns True on success."""
+        """Set Wi-Fi power save. Falls back to pkexec helper on failure."""
         state = "on" if enabled else "off"
         try:
             result = subprocess.run(
@@ -202,9 +187,14 @@ class WifiInfo:
                 text=True,
                 timeout=5,
             )
-            return result.returncode == 0
+            if result.returncode == 0:
+                return True
+            # Direct iw failed (likely needs root), try helper
+            log.debug("Direct iw failed, using helper for wifi power save")
+            return _run_helper_bool("wifi-powersave", self.interface, state)
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
+            # iw not found or timeout, try helper
+            return _run_helper_bool("wifi-powersave", self.interface, state)
 
 
 @dataclass
@@ -268,6 +258,54 @@ class HardwareCapabilities:
             "wifi": self.wifi is not None,
             "bluetooth": self.bluetooth is not None and self.bluetooth.available,
         }
+
+
+def _find_helper() -> str | None:
+    """Find the PowerPilot helper script."""
+    import os
+    import shutil
+
+    env_path = os.environ.get("POWERPILOT_HELPER_PATH")
+    if env_path and os.path.isfile(env_path) and os.access(env_path, os.X_OK):
+        return env_path
+
+    candidates = [
+        Path("/usr/lib/powerpilot/powerpilot-helper"),
+        Path("/usr/local/lib/powerpilot/powerpilot-helper"),
+        Path(__file__).parent.parent / "data" / "powerpilot-helper",
+    ]
+    for c in candidates:
+        if c.exists() and os.access(c, os.X_OK):
+            return str(c)
+
+    return shutil.which("powerpilot-helper")
+
+
+def _run_helper(command: str, *args: str) -> None:
+    """Run the PowerPilot helper via pkexec. Raises OSError on failure."""
+    helper = _find_helper()
+    if not helper:
+        raise OSError("PowerPilot helper script not found")
+
+    result = subprocess.run(
+        ["pkexec", helper, command, *args],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise OSError(f"Helper '{command}' failed: {result.stderr.strip()}")
+    log.debug("Helper '%s' succeeded: %s", command, result.stdout.strip())
+
+
+def _run_helper_bool(command: str, *args: str) -> bool:
+    """Run the helper and return True/False instead of raising."""
+    try:
+        _run_helper(command, *args)
+        return True
+    except (OSError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+        log.error("Helper '%s' failed: %s", command, e)
+        return False
 
 
 def detect_hardware() -> HardwareCapabilities:
