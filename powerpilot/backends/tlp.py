@@ -191,21 +191,42 @@ class TLPBackend(PowerBackend):
         return False
 
     def _find_helper(self) -> str | None:
-        """Find the PowerPilot helper script."""
-        # Check common locations
+        """Find the PowerPilot helper script.
+
+        Search order:
+        1. POWERPILOT_HELPER_PATH environment variable
+        2. System install locations
+        3. Relative to package (dev mode)
+        4. PATH lookup
+        """
+        # 1. Environment variable override
+        env_path = os.environ.get("POWERPILOT_HELPER_PATH")
+        if env_path and os.path.isfile(env_path) and os.access(env_path, os.X_OK):
+            log.debug("Helper found via POWERPILOT_HELPER_PATH: %s", env_path)
+            return env_path
+
+        # 2. System install locations
         candidates = [
             Path("/usr/lib/powerpilot/powerpilot-helper"),
             Path("/usr/local/lib/powerpilot/powerpilot-helper"),
-            Path(__file__).parent.parent.parent / "data" / "powerpilot-helper",
         ]
+
+        # 3. Relative to package (dev mode) — try multiple levels
+        pkg_dir = Path(__file__).parent.parent
+        candidates.extend([
+            pkg_dir / "data" / "powerpilot-helper",
+            pkg_dir.parent / "data" / "powerpilot-helper",
+        ])
 
         for candidate in candidates:
             if candidate.exists() and os.access(candidate, os.X_OK):
+                log.debug("Helper found at: %s", candidate)
                 return str(candidate)
 
-        # Try PATH
+        # 4. PATH lookup
         helper = shutil.which("powerpilot-helper")
         if helper:
+            log.debug("Helper found in PATH: %s", helper)
             return helper
 
         return None
