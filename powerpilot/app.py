@@ -108,25 +108,30 @@ class PowerPilotApp:
 
         gi.require_version("Gtk", "3.0")
 
-        # Try the newer glib-based library first, then fall back
-        try:
-            gi.require_version("AyatanaAppIndicatorGlib", "2.0")
-            from gi.repository import AyatanaAppIndicatorGlib as AppIndicator
-        except (ValueError, ImportError):
+        # Try AppIndicator libraries (GTK3-based first for compatibility)
+        AppIndicator = None
+        for lib_name, lib_version in [
+            ("AyatanaAppIndicator3", "0.1"),
+            ("AppIndicator3", "0.1"),
+        ]:
             try:
-                gi.require_version("AyatanaAppIndicator3", "0.1")
-                from gi.repository import AyatanaAppIndicator3 as AppIndicator
-            except (ValueError, ImportError):
-                try:
-                    gi.require_version("AppIndicator3", "0.1")
-                    from gi.repository import AppIndicator3 as AppIndicator
-                except (ValueError, ImportError):
-                    log.error(
-                        "No AppIndicator library found. "
-                        "Install gir1.2-ayatanaappindicatorglib-2.0 or "
-                        "gir1.2-ayatanaappindicator3-0.1"
-                    )
-                    sys.exit(1)
+                gi.require_version(lib_name, lib_version)
+                AppIndicator = __import__(
+                    "gi.repository", fromlist=[lib_name]
+                )
+                AppIndicator = getattr(AppIndicator, lib_name)
+                log.info("Using AppIndicator library: %s %s", lib_name, lib_version)
+                break
+            except (ValueError, ImportError, AttributeError):
+                continue
+
+        if AppIndicator is None:
+            log.error(
+                "No AppIndicator library found. "
+                "Install gir1.2-ayatanaappindicator3-0.1 or "
+                "gir1.2-appindicator3-0.1"
+            )
+            sys.exit(1)
 
         from gi.repository import Gtk, GLib
 
