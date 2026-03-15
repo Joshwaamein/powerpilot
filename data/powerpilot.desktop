@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=PowerPilot
+Comment=Universal power profile manager for Linux
+Exec=powerpilot
+Icon=battery-good-symbolic
+Terminal=false
+Categories=System;Settings;HardwareSettings;
+Keywords=power;battery;profile;tlp;performance;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Phase=Applications

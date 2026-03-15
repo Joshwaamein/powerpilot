@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "powerpilot"
+version = "0.1.0"
+description = "A universal power profile manager for Linux"
+readme = "README.md"
+license = {text = "GPL-3.0-or-later"}
+requires-python = ">=3.11"
+authors = [
+    {name = "PowerPilot Contributors"},
+]
+keywords = ["power", "battery", "linux", "tlp", "power-profiles-daemon", "gnome"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: X11 Applications :: GTK",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Hardware",
+    "Topic :: System :: Power (UPS)",
+    "Topic :: Desktop Environment :: Gnome",
+]
+
+[project.urls]
+Homepage = "https://github.com/powerpilot/powerpilot"
+Repository = "https://github.com/powerpilot/powerpilot"
+Issues = "https://github.com/powerpilot/powerpilot/issues"
+
+[project.scripts]
+powerpilot = "powerpilot.app:main"
+
+[tool.setuptools.packages.find]
+include = ["powerpilot*"]
