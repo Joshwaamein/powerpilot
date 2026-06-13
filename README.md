@@ -55,24 +55,30 @@ Each profile also controls: screen brightness, keyboard backlight, Wi-Fi power s
 sudo apt install gir1.2-ayatanaappindicator3-0.1 gir1.2-notify-0.7
 
 # Clone and install
-git clone https://github.com/powerpilot/powerpilot.git
+git clone https://github.com/Joshwaamein/powerpilot.git
 cd powerpilot
-sudo make install
+make install
 ```
+
+`make install` installs the Python package (via `pip install
+--break-system-packages .`), the polkit policy, the helper script, the
+TLP profile snippets, and an autostart `.desktop` entry. It does not
+need to be run with `sudo`; the polkit policy handles privilege
+escalation at runtime.
 
 ### Development Install
 
 ```bash
-git clone https://github.com/powerpilot/powerpilot.git
+git clone https://github.com/Joshwaamein/powerpilot.git
 cd powerpilot
-make dev-install
-powerpilot  # Run directly
+make dev-install   # editable install (pip install -e .)
+powerpilot         # run directly
 ```
 
 ### Uninstall
 
 ```bash
-sudo make uninstall
+make uninstall
 ```
 
 ## Configuration
@@ -164,6 +170,35 @@ journalctl --user -t powerpilot -f
 ```
 
 Or check `~/.local/state/powerpilot/powerpilot.log` if journald is unavailable.
+
+## Command-line usage
+
+PowerPilot is primarily a tray app, but it accepts a few flags:
+
+```
+powerpilot [--version] [--debug] [--no-notify] [--switch-backend {tlp,ppd}]
+```
+
+| Flag | Effect |
+|------|--------|
+| `--version` | Print the version and exit. |
+| `--debug` | Force debug logging on for this run (overrides the config). |
+| `--no-notify` | Disable desktop notifications for this run. |
+| `--switch-backend {tlp,ppd}` | Switch the active power backend, then exit. Validates the switch is possible first and requires root (handled via polkit). Useful for scripting or one-off changes without opening the menu. |
+
+## Development
+
+```bash
+make dev-install   # editable install (pip install -e .)
+make test          # run the pytest suite
+make lint          # py_compile every module
+make uninstall     # remove the package and installed files
+make clean         # remove build artefacts and __pycache__
+```
+
+The test suite lives under `tests/` and covers the backends, profiles,
+switcher, inhibitor, battery, config, hardware, notifications, and
+logging modules (158 tests). Run it before opening a PR.
 
 ## Contributing
 
